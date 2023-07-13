@@ -35,25 +35,24 @@ class Scraper:
         print(f'Read robots.txt: "{robots_url}"')
 
 
-    def get(self, url: str, success_message: str='') -> bool:
+    def get(self, url: str, success_message: str=''):
+        self.url = url
         user_agent = self.session.headers['User-Agent']
-        if self.rp.can_fetch(useragent=user_agent, url=url):
-            try:
-                response = self.session.get(url)
-                response.raise_for_status()
-                if success_message:
-                    print(success_message)
-                time.sleep(self.download_delay)
-                self.soup = BeautifulSoup(response.text, self.html_parser)
-                self.url = response.url
-                self.text = response.text
-                return True
-            except requests.exceptions.RequestException as e:
-                print(f'Error: {e} (URL "{url}")')
-                return False
-        else:
-            print(f'ERROR: URL "{url}" is prohibitied by robots.txt.')
-            return False
+        if not self.rp.can_fetch(useragent=user_agent, url=self.url):
+            print(f'ERROR: Access to URL "{self.url}" is prohibited by robots.txt.')
+            return
+
+        response = self.session.get(self.url)
+        self.url = response.url # リダイレクトに対応
+        time.sleep(self.download_delay)
+        if response.status_code != 200:
+            print(f'Error: Failed to get URL "{self.url}" (status code: {response.status_code})')
+            return
+
+        if success_message:
+            print(success_message)
+        self.soup = BeautifulSoup(response.text, self.html_parser)
+        self.text = response.text
 
 
     def select_one(self, selector):

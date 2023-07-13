@@ -1,14 +1,14 @@
 import os
 import sys
+import time
 import re
 import math
-from requests.models import Response
 import unicodedata
 import traceback
+from typing import Callable, Tuple, Type, Any
 
 import pandas as pd
 from pandas.core.frame import DataFrame
-from bs4 import BeautifulSoup
 
 from scraper import Scraper
 
@@ -91,7 +91,7 @@ def fetch_detail_urls(scraper: Scraper, first_list_page_url: str,
                       item_num_in_page: int=ITEM_NUM_IN_PAGE) -> list:
     scraper.get(first_list_page_url,
                 success_message=f'First list page "{first_list_page_url}" access succeeded.')
-    heading = scraper.soup.select_one('#mainContent .srp-controls__count').text
+    heading = scraper.select_one('#mainContent .srp-controls__count').text
     total_item_num = int(re.search(r'(\d+)件', heading)[1])
     total_page_num = math.ceil(total_item_num / item_num_in_page)
     print('Number of detail pages: ' + str(total_item_num))
@@ -109,7 +109,7 @@ def fetch_detail_urls(scraper: Scraper, first_list_page_url: str,
             undisplayed_item_num = 0
 
         try:
-            srp_list_element = scraper.soup.select_one('.srp-results.srp-list')
+            srp_list_element = scraper.select_one('.srp-results.srp-list')
             item_elements = srp_list_element.select('li.s-item.s-item__pl-on-bottom')
             a_elements = [i.select_one('.s-item__info a.s-item__link') for i in item_elements]
             a_elements = a_elements[:item_num_in_current_page] # 「一部の語句に一致する検索結果」を除外
@@ -132,33 +132,31 @@ def get_next_page(scraper: Scraper, first_url: str, page_num: int) -> bool:
 def fetch_item_infos(scraper: Scraper, detail_urls: list) -> DataFrame:
     len_detail_urls = len(detail_urls)
 
-    item_infos = pd.DataFrame(columns=OUTPUT_COLUMNS)
+    item_infos_df = pd.DataFrame(columns=OUTPUT_COLUMNS)
     for i, i_url in enumerate(detail_urls, start=1):
-        if not scraper.get(i_url):
-            continue # continueだけでいいのか？ログ出力とか
-
         try:
-            info = scrape(scraper.soup)
-
+            item_info = try_func(scrape_item_info, kwargs={'scraper': scraper, 'url': i_url})
         except Exception as e:
             handle_scraping_error(e, scraper)
 
-        info['url'] = scraper.url
+        item_info['url'] = scraper.url # リダイレクトされている場合もあるのでi_urlではなく、scraper.url
 
-        info_df = pd.DataFrame(info, index=[0])
-        item_infos = pd.concat([item_infos, info_df], ignore_index=True)
-        print(f'Item {i}/{len_detail_urls}:', info)
+        item_info_df = pd.DataFrame(item_info, index=[0])
+        item_infos_df = pd.concat([item_infos_df, item_info_df], ignore_index=True)
+        print(f'Item {i}/{len_detail_urls}:', item_info)
 
-    return item_infos
+    return item_infos_df
 
 
-def scrape(soup: BeautifulSoup) -> dict:
+def scrape_item_info(scraper: Scraper, url: str) -> dict:
+    scraper.get(url)
+
     info = {}
-    info['title'] = unicodedata.normalize('NFKD', soup.select_one('h1.x-item-title__mainTitle').text.strip())
-    info['condition'] = soup.select_one('.x-item-condition-value .clipped').text
-    price_string = soup.select_one('.x-buybox__price-section .x-price-approx').text
+    info['title'] = unicodedata.normalize('NFKD', scraper.select_one('h1.x-item-title__mainTitle').text.strip())
+    info['condition'] = scraper.select_one('.x-item-condition-value .clipped').text
+    price_string = scraper.select_one('.x-buybox__price-section .x-price-approx').text
     info['price'] = int(re.sub(r'\D', '', price_string))
-    shipping_element = soup.select_one('.vim.d-shipping-minview')
+    shipping_element = scraper.select_one('.vim.d-shipping-minview')
     row_elements = shipping_element.select('.ux-layout-section__row')
     for row_element in row_elements:
         row_text = row_element.text
@@ -210,6 +208,16 @@ def write_excel(excel_path: str, jl_path: str):
         for i_maker in makers:
             item_infos[item_infos['maker'] == i_maker].to_excel(writer, sheet_name=i_maker)
     print('Finished to write output excel file.')
+
+
+def try_func(func: Callable, args: Tuple=(), kwargs: dict={}, max_retry: int=3) -> Any:
+    for i in range(max_retry):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if i == max_retry - 1:
+                raise e
+            print(f'INFO: {func.__name__} failed. Try again.')
 
 
 def handle_scraping_error(e: Exception, scraper: Scraper):
