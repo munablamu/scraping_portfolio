@@ -1,20 +1,16 @@
 import os
 import sys
 import re
-import time
 import math
-import requests
-from requests.sessions import Session
 from requests.models import Response
-from urllib.robotparser import RobotFileParser
 import unicodedata
-import urllib.parse
 import traceback
-from typing import Union
 
 import pandas as pd
 from pandas.core.frame import DataFrame
 from bs4 import BeautifulSoup
+
+from scraper import Scraper
 
 DOWNLOAD_DELAY = 2
 BASE_URL = 'https://www.ebay.com/sch/i.html'
@@ -26,42 +22,17 @@ OUTPUT_COLUMNS = ['maker', 'model number', 'title', 'condition', 'price', 'posta
 HTML_PARSER = 'lxml'
 ITEM_NUM_IN_PAGE = 60
 
-# robots.txtの読み込み
-rp = RobotFileParser()
-ROBOTS_URL = urllib.parse.urljoin(BASE_URL, '/robots.txt')
-rp.set_url(ROBOTS_URL)
-rp.read()
-print(f'Read robots.txt: "{ROBOTS_URL}"')
-
-def get_response(session: Session, url: str, success_message: str='',
-                 delay: Union[int, float]=DOWNLOAD_DELAY):
-    user_agent = session.headers['User-Agent']
-    if rp.can_fetch(useragent=user_agent, url=url):
-        try:
-            response = session.get(url)
-            response.raise_for_status()
-            if success_message:
-                print(success_message)
-            time.sleep(delay)
-            return response
-        except requests.exceptions.RequestException as e:
-            print(f'Error: {e} (URL "{url}")')
-            return False
-    else:
-        print(f'URL "{url}" is prohibitied by robots.txt.')
-        return False
-
 
 def main():
     search_criteria_list = read_excel(INPUT_PATH)
 
-    with requests.Session() as session:
+    with Scraper(BASE_URL, HTML_PARSER, DOWNLOAD_DELAY) as scraper:
         for search_criteria in search_criteria_list:
-            if response := get_list_page(session, search_criteria):
-                detail_urls = fetch_detail_urls(session, response)
-                item_infos = fetch_item_infos(session, detail_urls)
-                item_infos = modify_item_infos(item_infos, search_criteria)
-                overwrite_jl(OUTPUT_JL_PATH, item_infos)
+            first_list_page_url = get_first_list_page_url(scraper, search_criteria)
+            detail_urls = fetch_detail_urls(scraper, first_list_page_url)
+            item_infos = fetch_item_infos(scraper, detail_urls)
+            modify_item_infos(item_infos, search_criteria)
+            overwrite_jl(OUTPUT_JL_PATH, item_infos)
 
     write_excel(OUTPUT_PATH, OUTPUT_JL_PATH)
         #search_criteria = {'keyword': 'kawai', '最低価格': '10000'}
@@ -84,7 +55,7 @@ def read_excel(input_path: str) -> list[dict]:
     for i_df in df_dict.values():
         maker = i_df['メーカー'].iloc[0]
         i_df['メーカー'].fillna(maker, inplace=True)
-        i_df['keyword'] = i_df['メーカー'] + '+' + i_df['製品型番']
+        i_df['keyword'] = (i_df['メーカー'] + '+' + i_df['製品型番']).replace(' ', '+')
     tmp_df = pd.concat(df_dict.values())
 
     # tmp_df = tmp_df.drop(['メーカー', '製品型番'], axis=1)
@@ -93,7 +64,8 @@ def read_excel(input_path: str) -> list[dict]:
     return result
 
 
-def get_list_page(session: Session, criteria: dict, item_num_in_page: int=ITEM_NUM_IN_PAGE) -> Response:
+def get_first_list_page_url(scraper: Scraper, criteria: dict,
+                            item_num_in_page: int=ITEM_NUM_IN_PAGE) -> bool:
     """
     一覧ページの1ページ目を取得する。
 
@@ -104,7 +76,7 @@ def get_list_page(session: Session, criteria: dict, item_num_in_page: int=ITEM_N
     Returns:
         str: _description_
     """
-    base_url = BASE_URL
+    base_url = scraper.base_url
     option_dict = {
         'keyword': f'_nkw={criteria["keyword"]}',
         'lowest_price': f'_udlo={criteria["最低価格"]}',
@@ -112,15 +84,14 @@ def get_list_page(session: Session, criteria: dict, item_num_in_page: int=ITEM_N
         'display_format': f'_dmd=1',
     }
     page_option = '&'.join(option_dict.values())
-    url = base_url + '?' + page_option
-    return get_response(session, url,
-                        success_message=f'First list page "{url}" access succeeded.')
+    return base_url + '?' + page_option
 
 
-def fetch_detail_urls(session: Session, response: Response, item_num_in_page: int=ITEM_NUM_IN_PAGE) -> list:
-    first_url = response.url
-    soup = BeautifulSoup(response.text, HTML_PARSER)
-    heading = soup.select_one('#mainContent .srp-controls__count').text
+def fetch_detail_urls(scraper: Scraper, first_list_page_url: str,
+                      item_num_in_page: int=ITEM_NUM_IN_PAGE) -> list:
+    scraper.get(first_list_page_url,
+                success_message=f'First list page "{first_list_page_url}" access succeeded.')
+    heading = scraper.soup.select_one('#mainContent .srp-controls__count').text
     total_item_num = int(re.search(r'(\d+)件', heading)[1])
     total_page_num = math.ceil(total_item_num / item_num_in_page)
     print('Number of detail pages: ' + str(total_item_num))
@@ -138,48 +109,41 @@ def fetch_detail_urls(session: Session, response: Response, item_num_in_page: in
             undisplayed_item_num = 0
 
         try:
-            srp_list_element = soup.select_one('.srp-results.srp-list')
+            srp_list_element = scraper.soup.select_one('.srp-results.srp-list')
             item_elements = srp_list_element.select('li.s-item.s-item__pl-on-bottom')
             a_elements = [i.select_one('.s-item__info a.s-item__link') for i in item_elements]
             a_elements = a_elements[:item_num_in_current_page] # 「一部の語句に一致する検索結果」を除外
-            urls.extend([i.get('href') for i in a_elements])
+            urls.extend([i.get('href').split('?')[0] for i in a_elements])
         except Exception as e:
-            handle_scraping_error(e, response)
+            handle_scraping_error(e, scraper)
 
         if page_num < total_page_num:
-            response = get_next_page(session, first_url, page_num+1)
-            if response:
-                soup = BeautifulSoup(response.text, HTML_PARSER)
-            else:
-                continue
+            get_next_page(scraper, first_list_page_url, page_num+1)
 
     return urls
 
 
-def get_next_page(session: Session, first_url: str, page_num: int) -> Response:
+def get_next_page(scraper: Scraper, first_url: str, page_num: int) -> bool:
     param_key = '_pgn'
     next_url = first_url + f'&{param_key}={page_num}'
-    return get_response(session, next_url,
-                        success_message=f'Next list page "{next_url}" access succeeded.')
+    return scraper.get(next_url, success_message=f'Next list page "{next_url}" access succeeded.')
 
 
-def fetch_item_infos(session: Session, detail_urls: list) -> DataFrame:
+def fetch_item_infos(scraper: Scraper, detail_urls: list) -> DataFrame:
     len_detail_urls = len(detail_urls)
 
     item_infos = pd.DataFrame(columns=OUTPUT_COLUMNS)
     for i, i_url in enumerate(detail_urls, start=1):
-        if not (response := get_response(session, i_url)):
+        if not scraper.get(i_url):
             continue # continueだけでいいのか？ログ出力とか
 
-        soup = BeautifulSoup(response.text, HTML_PARSER)
-
         try:
-            info = scrape(soup)
+            info = scrape(scraper.soup)
 
         except Exception as e:
-            handle_scraping_error(e, response)
+            handle_scraping_error(e, scraper)
 
-        info['url'] = response.url.split('?')[0]
+        info['url'] = scraper.url
 
         info_df = pd.DataFrame(info, index=[0])
         item_infos = pd.concat([item_infos, info_df], ignore_index=True)
@@ -226,8 +190,6 @@ def modify_item_infos(item_infos: DataFrame, search_criteria: dict) -> list[dict
     item_infos['maker'] = search_criteria['メーカー']
     item_infos['model number'] = search_criteria['製品型番']
 
-    return item_infos
-
 
 def overwrite_jl(jl_path: str, item_infos: DataFrame):
     if item_infos.empty:
@@ -250,11 +212,11 @@ def write_excel(excel_path: str, jl_path: str):
     print('Finished to write output excel file.')
 
 
-def handle_scraping_error(e: Exception, response: Response):
+def handle_scraping_error(e: Exception, scraper: Scraper):
     with open('scraping_error.html', 'w') as f:
-        f.write(response.text)
+        f.write(scraper.text)
     traceback.print_exc()
-    print(f'scraping error in URL "{response.url}"')
+    print(f'scraping error in URL "{scraper.url}"')
     sys.exit(1)
 
 
