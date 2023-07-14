@@ -4,6 +4,7 @@ from urllib.robotparser import RobotFileParser
 import urllib.parse
 from typing import Union, Callable, Tuple
 
+import pandas as pd
 from bs4 import BeautifulSoup
 
 
@@ -69,3 +70,29 @@ class Scraper:
 
     def find(self, name=None, attrs={}, recursive=True, text=None, **kwargs):
         return self.soup.find(name=name, attrs=attrs, recursive=recursive, text=text, **kwargs)
+
+
+class Item:
+    def __init__(self, columns):
+        self.df = pd.DataFrame(columns=columns)
+        self.columns = columns
+
+
+    def __setitem__(self, key, value):
+        self.df[key] = value
+
+
+    @property
+    def empty(self):
+        return self.df.empty
+
+
+    def add_row(self, data):
+        if not set(data.keys()).issubset(set(self.columns)):
+            raise ValueError('Data contains columns not in Item.')
+        new_df = pd.DataFrame(data, index=[0])
+        self.df = pd.concat([self.df, new_df], ignore_index=True)
+
+
+    def to_json(self, path_or_buf=None, orient='columns', **kwargs):
+        return self.df.to_json(path_or_buf=path_or_buf, orient=orient, **kwargs)

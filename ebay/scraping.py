@@ -1,33 +1,43 @@
 import os
 import sys
-import time
 import re
 import math
 import unicodedata
 import traceback
-from typing import Callable, Tuple, Type, Any
+from typing import Callable, Tuple, Any
+import json
+import argparse
 
 import pandas as pd
-from pandas.core.frame import DataFrame
 
-from scraper import Scraper
+from scraper import Scraper, Item
 
 DOWNLOAD_DELAY = 2
 BASE_URL = 'https://www.ebay.com/sch/i.html'
 INPUT_PATH = 'inputs/keyboard_list.xlsx'
 OUTPUT_JL_PATH = 'outputs/results.jl'
 OUTPUT_PATH = 'outputs/results.xlsx'
-OUTPUT_COLUMNS = ['maker', 'model number', 'title', 'condition', 'price', 'postage', 'import fees',
-                'duty', 'url']
+OUTPUT_COLUMNS = ['maker', 'model number', 'keyword', 'title', 'condition', 'price', 'postage',
+                  'import fees', 'duty', 'url']
 HTML_PARSER = 'lxml'
 ITEM_NUM_IN_PAGE = 60
 
 
 def main():
+    args = get_args()
+
     search_criteria_list = read_excel(INPUT_PATH)
+
+    scraped_keywords = set()
+    if args.restart:
+        scraped_keywords = read_jl(OUTPUT_JL_PATH)
 
     with Scraper(BASE_URL, HTML_PARSER, DOWNLOAD_DELAY) as scraper:
         for search_criteria in search_criteria_list:
+            if search_criteria['keyword'] in scraped_keywords:
+                print(f'INFO: Skip scraped keyword "{search_criteria["keyword"]}"')
+                continue
+
             first_list_page_url = get_first_list_page_url(scraper, search_criteria)
             detail_urls = fetch_detail_urls(scraper, first_list_page_url)
             item_infos = fetch_item_infos(scraper, detail_urls)
@@ -35,10 +45,12 @@ def main():
             overwrite_jl(OUTPUT_JL_PATH, item_infos)
 
     write_excel(OUTPUT_PATH, OUTPUT_JL_PATH)
-        #search_criteria = {'keyword': 'kawai', '最低価格': '10000'}
-        #response = get_list_page(session, search_criteria)
-        #detail_urls = fetch_detail_urls(session, response)
-        #item_infos = fetch_item_infos(session, detail_urls)
+
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--restart', action='store_true')
+    return parser.parse_args()
 
 
 def read_excel(input_path: str) -> list[dict]:
@@ -62,6 +74,15 @@ def read_excel(input_path: str) -> list[dict]:
     result = tmp_df.to_dict('records')
     print('Finished to read input excel file.')
     return result
+
+
+def read_jl(jl_path):
+    existed_keywords = set()
+    with open(jl_path, 'r') as file:
+        for line in file:
+            obj = json.loads(line)
+            existed_keywords.add(obj['keyword'])
+    return existed_keywords
 
 
 def get_first_list_page_url(scraper: Scraper, criteria: dict,
@@ -138,10 +159,10 @@ def get_next_page(scraper: Scraper, first_url: str, page_num: int) -> bool:
     return scraper.get(next_url, success_message=f'Next list page "{next_url}" access succeeded.')
 
 
-def fetch_item_infos(scraper: Scraper, detail_urls: list) -> DataFrame:
+def fetch_item_infos(scraper: Scraper, detail_urls: list) -> Item:
     len_detail_urls = len(detail_urls)
 
-    item_infos_df = pd.DataFrame(columns=OUTPUT_COLUMNS)
+    item_infos = Item(OUTPUT_COLUMNS)
     for i, i_url in enumerate(detail_urls, start=1):
         try:
             item_info = try_func(scrape_item_info, kwargs={'scraper': scraper, 'url': i_url})
@@ -150,11 +171,10 @@ def fetch_item_infos(scraper: Scraper, detail_urls: list) -> DataFrame:
 
         item_info['url'] = scraper.url # リダイレクトされている場合もあるのでi_urlではなく、scraper.url
 
-        item_info_df = pd.DataFrame(item_info, index=[0])
-        item_infos_df = pd.concat([item_infos_df, item_info_df], ignore_index=True)
+        item_infos.add_row(item_info)
         print(f'Item {i}/{len_detail_urls}:', item_info)
 
-    return item_infos_df
+    return item_infos
 
 
 def scrape_item_info(scraper: Scraper, url: str) -> dict:
@@ -193,12 +213,13 @@ def get_charge(string: str) -> int:
             return None
 
 
-def modify_item_infos(item_infos: DataFrame, search_criteria: dict) -> list[dict]:
+def modify_item_infos(item_infos: Item, search_criteria: dict):
     item_infos['maker'] = search_criteria['メーカー']
     item_infos['model number'] = search_criteria['製品型番']
+    item_infos['keyword'] = search_criteria['keyword']
 
 
-def overwrite_jl(jl_path: str, item_infos: DataFrame):
+def overwrite_jl(jl_path: str, item_infos: Item):
     if item_infos.empty:
         return
 
