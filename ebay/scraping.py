@@ -89,6 +89,18 @@ def get_first_list_page_url(scraper: Scraper, criteria: dict,
 
 def fetch_detail_urls(scraper: Scraper, first_list_page_url: str,
                       item_num_in_page: int=ITEM_NUM_IN_PAGE) -> list:
+    try:
+        urls = try_func(scrape_detail_urls, kwargs={'scraper': scraper,
+                                                    'first_list_page_url': first_list_page_url,
+                                                    'item_num_in_page': item_num_in_page})
+    except Exception as e:
+        handle_scraping_error(e, scraper)
+
+    return urls
+
+
+def scrape_detail_urls(scraper: Scraper, first_list_page_url: str,
+                      item_num_in_page: int=ITEM_NUM_IN_PAGE) -> list[str]:
     scraper.get(first_list_page_url,
                 success_message=f'First list page "{first_list_page_url}" access succeeded.')
     heading = scraper.select_one('#mainContent .srp-controls__count').text
@@ -108,14 +120,11 @@ def fetch_detail_urls(scraper: Scraper, first_list_page_url: str,
             item_num_in_current_page = undisplayed_item_num
             undisplayed_item_num = 0
 
-        try:
-            srp_list_element = scraper.select_one('.srp-results.srp-list')
-            item_elements = srp_list_element.select('li.s-item.s-item__pl-on-bottom')
-            a_elements = [i.select_one('.s-item__info a.s-item__link') for i in item_elements]
-            a_elements = a_elements[:item_num_in_current_page] # 「一部の語句に一致する検索結果」を除外
-            urls.extend([i.get('href').split('?')[0] for i in a_elements])
-        except Exception as e:
-            handle_scraping_error(e, scraper)
+        srp_list_element = scraper.select_one('.srp-results.srp-list')
+        item_elements = srp_list_element.select('li.s-item.s-item__pl-on-bottom')
+        a_elements = [i.select_one('.s-item__info a.s-item__link') for i in item_elements]
+        a_elements = a_elements[:item_num_in_current_page] # 「一部の語句に一致する検索結果」を除外
+        urls.extend([i.get('href').split('?')[0] for i in a_elements])
 
         if page_num < total_page_num:
             get_next_page(scraper, first_list_page_url, page_num+1)
