@@ -228,10 +228,6 @@ def overwrite_jl(jl_path: str, item_infos: Item):
 
 
 def write_excel(excel_path: str, jl_path: str):
-    if not os.path.exists(jl_path):
-        print(f'File {jl_path} does not exist.')
-        return
-
     item_infos = pd.read_json(jl_path, orient='records', lines=True)
     makers = item_infos['maker'].unique()
     with pd.ExcelWriter(excel_path) as writer:
@@ -245,6 +241,7 @@ def try_func(func: Callable, args: Tuple=(), kwargs: dict={}, max_retry: int=3) 
         try:
             return func(*args, **kwargs)
         except Exception as e:
+            print(e)
             if i == max_retry - 1:
                 raise e
             print(f'INFO: {func.__name__} failed. Try again.')

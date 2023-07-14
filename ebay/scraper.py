@@ -40,15 +40,13 @@ class Scraper:
         self.url = url
         user_agent = self.session.headers['User-Agent']
         if not self.rp.can_fetch(useragent=user_agent, url=self.url):
-            print(f'ERROR: Access to URL "{self.url}" is prohibited by robots.txt.')
-            return
+            raise Exception(f'Error: Access to URL "{self.url}" is prohibited by robots.txt.')
 
         response = self.session.get(self.url)
         self.url = response.url # リダイレクトに対応
         time.sleep(self.download_delay)
         if response.status_code != 200:
-            print(f'Error: Failed to get URL "{self.url}" (status code: {response.status_code})')
-            return
+            raise Exception(f'Error: Failed to get URL "{self.url}" (status code: {response.status_code})')
 
         if success_message:
             print(success_message)
