@@ -2,3 +2,4 @@ __pycache__
 *.jl
 outputs/
 *.log
+scraping_error.html

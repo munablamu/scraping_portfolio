@@ -1,4 +1,3 @@
-import os
 import sys
 import re
 import math
@@ -7,6 +6,7 @@ import traceback
 from typing import Callable, Tuple, Any
 import json
 import argparse
+from argparse import Namespace
 
 import pandas as pd
 
@@ -47,7 +47,13 @@ def main():
     write_excel(OUTPUT_PATH, OUTPUT_JL_PATH)
 
 
-def get_args():
+def get_args() -> Namespace:
+    """
+    コマンドライン引数の名前空間を返す。
+
+    Returns:
+        Namespace: _description_
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument('--restart', action='store_true')
     return parser.parse_args()
@@ -76,7 +82,16 @@ def read_excel(input_path: str) -> list[dict]:
     return result
 
 
-def read_jl(jl_path):
+def read_jl(jl_path: str) -> set:
+    """
+    'results.jl'を読み込んで、スクレイピング済みの検索キーワードを返す。
+
+    Args:
+        jl_path (str): _description_
+
+    Returns:
+        set: _description_
+    """
     existed_keywords = set()
     with open(jl_path, 'r') as file:
         for line in file:
@@ -88,7 +103,7 @@ def read_jl(jl_path):
 def get_first_list_page_url(scraper: Scraper, criteria: dict,
                             item_num_in_page: int=ITEM_NUM_IN_PAGE) -> bool:
     """
-    一覧ページの1ページ目を取得する。
+    一覧ページの1ページ目のURLを取得する。
 
     Args:
         session (Session): _description_
@@ -110,6 +125,18 @@ def get_first_list_page_url(scraper: Scraper, criteria: dict,
 
 def fetch_detail_urls(scraper: Scraper, first_list_page_url: str,
                       item_num_in_page: int=ITEM_NUM_IN_PAGE) -> list:
+    """
+    一覧ページから詳細ページを取得する。
+    ただし、取得に失敗した場合、複数回試行を繰り返す。
+
+    Args:
+        scraper (Scraper): _description_
+        first_list_page_url (str): _description_
+        item_num_in_page (int, optional): _description_. Defaults to ITEM_NUM_IN_PAGE.
+
+    Returns:
+        list: _description_
+    """
     try:
         urls = try_func(scrape_detail_urls, kwargs={'scraper': scraper,
                                                     'first_list_page_url': first_list_page_url,
@@ -122,6 +149,17 @@ def fetch_detail_urls(scraper: Scraper, first_list_page_url: str,
 
 def scrape_detail_urls(scraper: Scraper, first_list_page_url: str,
                       item_num_in_page: int=ITEM_NUM_IN_PAGE) -> list[str]:
+    """
+    一覧ページから詳細ページのURLを取得する。
+
+    Args:
+        scraper (Scraper): _description_
+        first_list_page_url (str): _description_
+        item_num_in_page (int, optional): _description_. Defaults to ITEM_NUM_IN_PAGE.
+
+    Returns:
+        list[str]: _description_
+    """
     scraper.get(first_list_page_url,
                 success_message=f'First list page "{first_list_page_url}" access succeeded.')
     heading = scraper.select_one('#mainContent .srp-controls__count').text
@@ -153,13 +191,35 @@ def scrape_detail_urls(scraper: Scraper, first_list_page_url: str,
     return urls
 
 
-def get_next_page(scraper: Scraper, first_url: str, page_num: int) -> bool:
+def get_next_page(scraper: Scraper, first_url: str, page_num: int):
+    """
+    次のページの一覧ページを取得する。
+
+    Args:
+        scraper (Scraper): _description_
+        first_url (str): _description_
+        page_num (int): _description_
+
+    Returns:
+        bool: _description_
+    """
     param_key = '_pgn'
     next_url = first_url + f'&{param_key}={page_num}'
-    return scraper.get(next_url, success_message=f'Next list page "{next_url}" access succeeded.')
+    scraper.get(next_url, success_message=f'Next list page "{next_url}" access succeeded.')
 
 
 def fetch_item_infos(scraper: Scraper, detail_urls: list) -> Item:
+    """
+    すべての詳細ページから情報を取得する。
+    ただし、取得に失敗した場合、複数回試行を繰り返す。
+
+    Args:
+        scraper (Scraper): _description_
+        detail_urls (list): _description_
+
+    Returns:
+        Item: _description_
+    """
     len_detail_urls = len(detail_urls)
 
     item_infos = Item(OUTPUT_COLUMNS)
@@ -178,6 +238,16 @@ def fetch_item_infos(scraper: Scraper, detail_urls: list) -> Item:
 
 
 def scrape_item_info(scraper: Scraper, url: str) -> dict:
+    """
+    1つの詳細ページから情報を取得する。
+
+    Args:
+        scraper (Scraper): _description_
+        url (str): _description_
+
+    Returns:
+        dict: _description_
+    """
     scraper.get(url)
 
     info = {}
@@ -202,6 +272,15 @@ def scrape_item_info(scraper: Scraper, url: str) -> dict:
 
 
 def get_charge(string: str) -> int:
+    """
+    与えられた文字列からJPY以降の料金を抜き出す。
+
+    Args:
+        string (str): _description_
+
+    Returns:
+        int: _description_
+    """
     if '無料' in string:
         return 0
     else:
@@ -214,12 +293,26 @@ def get_charge(string: str) -> int:
 
 
 def modify_item_infos(item_infos: Item, search_criteria: dict):
+    """
+    Itemにメーカー名、製品型番、検索キーワードを追加する。
+
+    Args:
+        item_infos (Item): _description_
+        search_criteria (dict): _description_
+    """
     item_infos['maker'] = search_criteria['メーカー']
     item_infos['model number'] = search_criteria['製品型番']
     item_infos['keyword'] = search_criteria['keyword']
 
 
 def overwrite_jl(jl_path: str, item_infos: Item):
+    """
+    Itemをjsonlineファイルに追記する。
+
+    Args:
+        jl_path (str): _description_
+        item_infos (Item): _description_
+    """
     if item_infos.empty:
         return
 
@@ -228,6 +321,13 @@ def overwrite_jl(jl_path: str, item_infos: Item):
 
 
 def write_excel(excel_path: str, jl_path: str):
+    """
+    jsonlineファイルをexcelファイルに変換する。
+
+    Args:
+        excel_path (str): _description_
+        jl_path (str): _description_
+    """
     item_infos = pd.read_json(jl_path, orient='records', lines=True)
     makers = item_infos['maker'].unique()
     with pd.ExcelWriter(excel_path) as writer:
@@ -237,6 +337,21 @@ def write_excel(excel_path: str, jl_path: str):
 
 
 def try_func(func: Callable, args: Tuple=(), kwargs: dict={}, max_retry: int=3) -> Any:
+    """
+    funcが成功するまで、複数回試行する。
+
+    Args:
+        func (Callable): _description_
+        args (Tuple, optional): _description_. Defaults to ().
+        kwargs (dict, optional): _description_. Defaults to {}.
+        max_retry (int, optional): _description_. Defaults to 3.
+
+    Raises:
+        e: _description_
+
+    Returns:
+        Any: _description_
+    """
     for i in range(max_retry):
         try:
             return func(*args, **kwargs)
@@ -248,6 +363,13 @@ def try_func(func: Callable, args: Tuple=(), kwargs: dict={}, max_retry: int=3) 
 
 
 def handle_scraping_error(e: Exception, scraper: Scraper):
+    """
+    スクレイピング時のエラーを処理する。
+
+    Args:
+        e (Exception): _description_
+        scraper (Scraper): _description_
+    """
     with open('scraping_error.html', 'w') as f:
         f.write(scraper.text)
     traceback.print_exc()

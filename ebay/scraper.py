@@ -2,7 +2,7 @@ import time
 import requests
 from urllib.robotparser import RobotFileParser
 import urllib.parse
-from typing import Union, Callable, Tuple
+from typing import Union
 
 import pandas as pd
 from bs4 import BeautifulSoup
